@@ -33,20 +33,17 @@ def send_telegram(message):
     r.raise_for_status()
 
 def scrape_with_apify():
-    # Actor: powerai/leboncoin-search-scraper
-    run_url = f"https://api.apify.com/v2/acts/powerai~leboncoin-search-scraper/runs?token={APIFY_TOKEN}"
+    run_url = f"https://api.apify.com/v2/acts/fatihtahta~leboncoin-fr-scraper/runs?token={APIFY_TOKEN}"
     input_data = {
         "startUrls": [{"url": SEARCH_URL}],
         "maxItems": 50,
     }
     resp = requests.post(run_url, json=input_data, timeout=30)
     resp.raise_for_status()
-    run_data = resp.json()["data"]
-    run_id = run_data["id"]
+    run_id = resp.json()["data"]["id"]
     print(f"Apify run basladi: {run_id}")
 
-    # Bitene kadar bekle (max 3 dakika)
-    for i in range(18):
+    for i in range(24):
         time.sleep(10)
         status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_TOKEN}"
         status_resp = requests.get(status_url, timeout=10)
@@ -60,7 +57,6 @@ def scrape_with_apify():
     else:
         raise Exception("Apify run zaman asimi")
 
-    # Sonuclari al
     items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
     items_resp = requests.get(items_url, timeout=15)
     items_resp.raise_for_status()
@@ -69,18 +65,18 @@ def scrape_with_apify():
 
     listings = []
     for item in items:
-        ad_id = str(item.get("id", item.get("listId", item.get("adId", ""))))
+        ad_id = str(item.get("id", item.get("list_id", item.get("adId", ""))))
         title = item.get("title", item.get("subject", "Baslik yok"))
         price = item.get("price", "Fiyat belirtilmemis")
         if isinstance(price, dict):
-            price = price.get("display", str(price.get("amount", ""))) + " EUR"
+            price = str(price.get("amount", price.get("display", ""))) + " EUR"
         elif isinstance(price, (int, float)):
             price = f"{price} EUR"
         location = item.get("location", "")
         if isinstance(location, dict):
             location = location.get("city", "")
         link = item.get("url", item.get("link", ""))
-        date = str(item.get("postedAt", item.get("date", item.get("publicationDate", ""))))[:10]
+        date = str(item.get("first_publication_date", item.get("postedAt", item.get("date", ""))))[:10]
 
         if ad_id:
             listings.append({
