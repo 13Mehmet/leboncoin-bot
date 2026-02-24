@@ -1,10 +1,12 @@
 import os
 import json
 import requests
+import time
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+APIFY_TOKEN = os.environ["APIFY_TOKEN"]
 SEEN_FILE = "seen_ids.json"
 
 def load_seen_ids():
@@ -28,45 +30,54 @@ def send_telegram(message):
     r = requests.post(url, json=payload, timeout=10)
     r.raise_for_status()
 
-def scrape_listings():
-    api_url = "https://api.leboncoin.fr/finder/search"
-    headers = {
-        "User-Agent": "LeBonCoin/9.0.0 (iPhone; iOS 16.0)",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "api_key": "ba0c2dad52b3585d5d6b3b0a5f0d5a8a",
+def scrape_with_apify():
+    # Apify Leboncoin scraper'i baslat
+    run_url = f"https://api.apify.com/v2/acts/tugkan~leboncoin-scraper/runs?token={APIFY_TOKEN}"
+    
+    input_data = {
+        "startUrls": [
+            {
+                "url": "https://www.leboncoin.fr/recherche?category=2&locations=Lyon&price=min-8000,max-11000&mileage=min-0,max-190000&year=min-2018&sort=time"
+            }
+        ],
+        "maxItems": 50,
     }
-    payload = {
-        "filters": {
-            "category": {"id": "2"},
-            "location": {
-                "city_zipcodes": [{"city": "Lyon", "zipcode": "69000"}]
-            },
-            "keywords": {},
-            "ranges": {
-                "price": {"min": 8000, "max": 11000},
-                "mileage": {"min": 0, "max": 190000},
-                "regdate": {"min": 2018},
-            },
-        },
-        "limit": 35,
-        "sort_by": "time",
-        "sort_order": "desc",
-        "offset": 0,
-    }
-    resp = requests.post(api_url, json=payload, headers=headers, timeout=15)
+    
+    resp = requests.post(run_url, json=input_data, timeout=30)
     resp.raise_for_status()
-    data = resp.json()
-
+    run_id = resp.json()["data"]["id"]
+    print(f"Apify run basladi: {run_id}")
+    
+    # Run bitene kadar bekle (max 3 dakika)
+    for _ in range(18):
+        time.sleep(10)
+        status_url = f"https://api.apify.com/v2/acts/tugkan~leboncoin-scraper/runs/{run_id}?token={APIFY_TOKEN}"
+        status_resp = requests.get(status_url, timeout=10)
+        status = status_resp.json()["data"]["status"]
+        print(f"Status: {status}")
+        if status == "SUCCEEDED":
+            break
+        elif status in ["FAILED", "ABORTED"]:
+            raise Exception(f"Apify run basarisiz: {status}")
+    
+    # Sonuclari al
+    dataset_id = status_resp.json()["data"]["defaultDatasetId"]
+    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
+    items_resp = requests.get(items_url, timeout=15)
+    items_resp.raise_for_status()
+    items = items_resp.json()
+    
     listings = []
-    for ad in data.get("ads", []):
-        ad_id = str(ad.get("list_id", ""))
-        title = ad.get("subject", "Baslik yok")
-        price_val = ad.get("price", [None])[0] if ad.get("price") else None
-        price = f"{price_val} EUR" if price_val else "Fiyat belirtilmemis"
-        location = ad.get("location", {}).get("city", "")
-        link = ad.get("url", "")
-        date = ad.get("first_publication_date", "")[:10] if ad.get("first_publication_date") else ""
+    for item in items:
+        ad_id = str(item.get("id", item.get("listId", "")))
+        title = item.get("title", item.get("subject", "Baslik yok"))
+        price = item.get("price", "Fiyat belirtilmemis")
+        if isinstance(price, (int, float)):
+            price = f"{price} EUR"
+        location = item.get("location", item.get("city", ""))
+        link = item.get("url", item.get("link", ""))
+        date = str(item.get("date", item.get("publicationDate", "")))[:10]
+        
         if ad_id:
             listings.append({
                 "id": ad_id,
@@ -76,6 +87,7 @@ def scrape_listings():
                 "link": link,
                 "date": date,
             })
+    
     return listings
 
 def main():
@@ -84,7 +96,7 @@ def main():
     print(f"Daha once gorulen ilan: {len(seen_ids)}")
 
     try:
-        listings = scrape_listings()
+        listings = scrape_with_apify()
     except Exception as e:
         send_telegram(f"HATA: {e}")
         raise
