@@ -1,37 +1,11 @@
 import os
 import json
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime
 
-# ── Ayarlar ──────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SEEN_FILE = "seen_ids.json"
-
-# Leboncoin filtreler — istediğin gibi düzenle
-SEARCH_URL = (
-    "https://www.leboncoin.fr/recherche"
-    "?category=2"
-    "&locations=Lyon"
-    "&price=min-8000,max-11000"
-    "&mileage=min-0,max-190000"
-    "&year=min-2018"
-    "&sort=time"
-    "&owner_type=all"
-)
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "fr-FR,fr;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-# ── Yardımcı Fonksiyonlar ─────────────────────────────────
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -39,11 +13,11 @@ def load_seen_ids():
             return set(json.load(f))
     return set()
 
-def save_seen_ids(ids: set):
+def save_seen_ids(ids):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(ids), f)
 
-def send_telegram(message: str):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -55,112 +29,91 @@ def send_telegram(message: str):
     r.raise_for_status()
 
 def scrape_listings():
-    """Leboncoin'dan ilanları çek ve parse et."""
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    resp = session.get(SEARCH_URL, timeout=15)
+    api_url = "https://api.leboncoin.fr/finder/search"
+    headers = {
+        "User-Agent": "LeBonCoin/9.0.0 (iPhone; iOS 16.0)",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "api_key": "ba0c2dad52b3585d5d6b3b0a5f0d5a8a",
+    }
+    payload = {
+        "filters": {
+            "category": {"id": "2"},
+            "location": {
+                "city_zipcodes": [{"city": "Lyon", "zipcode": "69000"}]
+            },
+            "keywords": {},
+            "ranges": {
+                "price": {"min": 8000, "max": 11000},
+                "mileage": {"min": 0, "max": 190000},
+                "regdate": {"min": 2018},
+            },
+        },
+        "limit": 35,
+        "sort_by": "time",
+        "sort_order": "desc",
+        "offset": 0,
+    }
+    resp = requests.post(api_url, json=payload, headers=headers, timeout=15)
     resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "html.parser")
+    data = resp.json()
 
     listings = []
-
-    # Leboncoin ilanları data-qa-id="aditem_container" içinde
-    items = soup.select('[data-qa-id="aditem_container"]')
-
-    if not items:
-        # Alternatif selector dene
-        items = soup.select('article[data-reactid]') or soup.select('li[itemtype*="Offer"]')
-
-    for item in items:
-        try:
-            # ID
-            ad_id = item.get("data-id") or item.get("id") or ""
-
-            # Başlık
-            title_el = item.select_one('[data-qa-id="aditem_title"]') or item.select_one('h2')
-            title = title_el.get_text(strip=True) if title_el else "Başlık yok"
-
-            # Fiyat
-            price_el = item.select_one('[data-qa-id="aditem_price"]') or item.select_one('[class*="price"]')
-            price = price_el.get_text(strip=True) if price_el else "Fiyat belirtilmemiş"
-
-            # Konum
-            location_el = item.select_one('[data-qa-id="aditem_location"]') or item.select_one('[class*="location"]')
-            location = location_el.get_text(strip=True) if location_el else ""
-
-            # Link
-            link_el = item.select_one('a')
-            link = ""
-            if link_el and link_el.get("href"):
-                href = link_el["href"]
-                link = f"https://www.leboncoin.fr{href}" if href.startswith("/") else href
-
-            # Tarih
-            date_el = item.select_one('[data-qa-id="aditem_date"]') or item.select_one('time')
-            date = date_el.get_text(strip=True) if date_el else ""
-
-            if ad_id and title:
-                listings.append({
-                    "id": ad_id,
-                    "title": title,
-                    "price": price,
-                    "location": location,
-                    "link": link,
-                    "date": date,
-                })
-        except Exception as e:
-            print(f"  ⚠️ İlan parse hatası: {e}")
-            continue
-
+    for ad in data.get("ads", []):
+        ad_id = str(ad.get("list_id", ""))
+        title = ad.get("subject", "Baslik yok")
+        price_val = ad.get("price", [None])[0] if ad.get("price") else None
+        price = f"{price_val} EUR" if price_val else "Fiyat belirtilmemis"
+        location = ad.get("location", {}).get("city", "")
+        link = ad.get("url", "")
+        date = ad.get("first_publication_date", "")[:10] if ad.get("first_publication_date") else ""
+        if ad_id:
+            listings.append({
+                "id": ad_id,
+                "title": title,
+                "price": price,
+                "location": location,
+                "link": link,
+                "date": date,
+            })
     return listings
 
-# ── Ana Akış ─────────────────────────────────────────────
-
 def main():
-    print(f"🚗 Leboncoin Bot başladı — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
+    print(f"Bot basladi - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     seen_ids = load_seen_ids()
-    print(f"📋 Daha önce görülen ilan sayısı: {len(seen_ids)}")
+    print(f"Daha once gorulen ilan: {len(seen_ids)}")
 
     try:
         listings = scrape_listings()
     except Exception as e:
-        send_telegram(f"⚠️ <b>Leboncoin Bot Hatası</b>\n{e}")
+        send_telegram(f"HATA: {e}")
         raise
 
-    print(f"📦 Bulunan toplam ilan: {len(listings)}")
-
+    print(f"Bulunan ilan: {len(listings)}")
     new_listings = [l for l in listings if l["id"] not in seen_ids]
-    print(f"🆕 Yeni ilan sayısı: {len(new_listings)}")
+    print(f"Yeni ilan: {len(new_listings)}")
 
     if not new_listings:
-        print("✅ Yeni ilan yok.")
-        send_telegram("✅ <b>Leboncoin Tarama Tamamlandı</b>\nYeni ilan bulunamadı.")
+        send_telegram("Leboncoin tarama tamamlandi. Yeni ilan bulunamadi.")
         return
 
-    # Telegram'a gönder
-    header = f"🚗 <b>{len(new_listings)} Yeni İlan Bulundu!</b> — {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-    send_telegram(header)
+    send_telegram(f"<b>{len(new_listings)} Yeni Araba Ilani!</b>")
 
-    for listing in new_listings[:20]:  # Max 20 ilan gönder
+    for listing in new_listings[:20]:
         msg = (
-            f"📌 <b>{listing['title']}</b>\n"
-            f"💶 {listing['price']}\n"
-            f"📍 {listing['location']}\n"
-            f"🕐 {listing['date']}\n"
-            f"🔗 <a href='{listing['link']}'>İlanı Gör</a>"
+            f"<b>{listing['title']}</b>\n"
+            f"{listing['price']}\n"
+            f"{listing['location']} - {listing['date']}\n"
+            f"<a href='{listing['link']}'>Ilani Gor</a>"
         )
         try:
             send_telegram(msg)
         except Exception as e:
-            print(f"  ❌ Telegram gönderim hatası: {e}")
-
+            print(f"Telegram hatasi: {e}")
         seen_ids.add(listing["id"])
 
     save_seen_ids(seen_ids)
-    print("✅ Tamamlandı, seen_ids güncellendi.")
+    print("Tamamlandi.")
 
 if __name__ == "__main__":
     main()
