@@ -9,6 +9,8 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 APIFY_TOKEN = os.environ["APIFY_TOKEN"]
 SEEN_FILE = "seen_ids.json"
 
+SEARCH_URL = "https://www.leboncoin.fr/recherche?category=2&locations=Lyon&price=min-8000,max-11000&mileage=min-0,max-190000&year=min-2018&sort=time"
+
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r") as f:
@@ -31,53 +33,55 @@ def send_telegram(message):
     r.raise_for_status()
 
 def scrape_with_apify():
-    # Apify Leboncoin scraper'i baslat
-    run_url = f"https://api.apify.com/v2/acts/tugkan~leboncoin-scraper/runs?token={APIFY_TOKEN}"
-    
+    # Actor: powerai/leboncoin-search-scraper
+    run_url = f"https://api.apify.com/v2/acts/powerai~leboncoin-search-scraper/runs?token={APIFY_TOKEN}"
     input_data = {
-        "startUrls": [
-            {
-                "url": "https://www.leboncoin.fr/recherche?category=2&locations=Lyon&price=min-8000,max-11000&mileage=min-0,max-190000&year=min-2018&sort=time"
-            }
-        ],
+        "startUrls": [{"url": SEARCH_URL}],
         "maxItems": 50,
     }
-    
     resp = requests.post(run_url, json=input_data, timeout=30)
     resp.raise_for_status()
-    run_id = resp.json()["data"]["id"]
+    run_data = resp.json()["data"]
+    run_id = run_data["id"]
     print(f"Apify run basladi: {run_id}")
-    
-    # Run bitene kadar bekle (max 3 dakika)
-    for _ in range(18):
+
+    # Bitene kadar bekle (max 3 dakika)
+    for i in range(18):
         time.sleep(10)
-        status_url = f"https://api.apify.com/v2/acts/tugkan~leboncoin-scraper/runs/{run_id}?token={APIFY_TOKEN}"
+        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_TOKEN}"
         status_resp = requests.get(status_url, timeout=10)
         status = status_resp.json()["data"]["status"]
-        print(f"Status: {status}")
+        print(f"[{i+1}] Status: {status}")
         if status == "SUCCEEDED":
+            dataset_id = status_resp.json()["data"]["defaultDatasetId"]
             break
-        elif status in ["FAILED", "ABORTED"]:
+        elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
             raise Exception(f"Apify run basarisiz: {status}")
-    
+    else:
+        raise Exception("Apify run zaman asimi")
+
     # Sonuclari al
-    dataset_id = status_resp.json()["data"]["defaultDatasetId"]
     items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
     items_resp = requests.get(items_url, timeout=15)
     items_resp.raise_for_status()
     items = items_resp.json()
-    
+    print(f"Apify'dan gelen ilan sayisi: {len(items)}")
+
     listings = []
     for item in items:
-        ad_id = str(item.get("id", item.get("listId", "")))
+        ad_id = str(item.get("id", item.get("listId", item.get("adId", ""))))
         title = item.get("title", item.get("subject", "Baslik yok"))
         price = item.get("price", "Fiyat belirtilmemis")
-        if isinstance(price, (int, float)):
+        if isinstance(price, dict):
+            price = price.get("display", str(price.get("amount", ""))) + " EUR"
+        elif isinstance(price, (int, float)):
             price = f"{price} EUR"
-        location = item.get("location", item.get("city", ""))
+        location = item.get("location", "")
+        if isinstance(location, dict):
+            location = location.get("city", "")
         link = item.get("url", item.get("link", ""))
-        date = str(item.get("date", item.get("publicationDate", "")))[:10]
-        
+        date = str(item.get("postedAt", item.get("date", item.get("publicationDate", ""))))[:10]
+
         if ad_id:
             listings.append({
                 "id": ad_id,
@@ -87,7 +91,6 @@ def scrape_with_apify():
                 "link": link,
                 "date": date,
             })
-    
     return listings
 
 def main():
@@ -101,7 +104,6 @@ def main():
         send_telegram(f"HATA: {e}")
         raise
 
-    print(f"Bulunan ilan: {len(listings)}")
     new_listings = [l for l in listings if l["id"] not in seen_ids]
     print(f"Yeni ilan: {len(new_listings)}")
 
