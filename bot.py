@@ -9,7 +9,7 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 APIFY_TOKEN = os.environ["APIFY_TOKEN"]
 SEEN_FILE = "seen_ids.json"
 
-SEARCH_URL = "https://www.leboncoin.fr/recherche?category=2&locations=Lyon&price=min-8000,max-11000&mileage=min-0,max-190000&year=min-2018&sort=time"
+SEARCH_URL = "https://www.leboncoin.fr/recherche?category=2&locations=Lyon_69000&price=min-8000,max-11000&mileage=min-0,max-190000&year=min-2018&sort=time"
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
