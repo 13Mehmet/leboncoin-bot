@@ -1,7 +1,6 @@
 import os
 import json
 import requests
-import time
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -33,35 +32,20 @@ def send_telegram(message):
     r.raise_for_status()
 
 def scrape_with_apify():
-    run_url = f"https://api.apify.com/v2/acts/fatihtahta~leboncoin-fr-scraper/runs?token={APIFY_TOKEN}"
+    # run-sync-get-dataset-items: tek istekte calistir ve sonuclari al
+    url = (
+        f"https://api.apify.com/v2/acts/fatihtahta~leboncoin-fr-scraper"
+        f"/run-sync-get-dataset-items?token={APIFY_TOKEN}&memory=512&timeout=120"
+    )
     input_data = {
         "startUrls": [{"url": SEARCH_URL}],
         "maxItems": 50,
     }
-    resp = requests.post(run_url, json=input_data, timeout=30)
+    print("Apify cagrisi yapiliyor (max 2 dakika)...")
+    resp = requests.post(url, json=input_data, timeout=150)
     resp.raise_for_status()
-    run_id = resp.json()["data"]["id"]
-    print(f"Apify run basladi: {run_id}")
-
-    for i in range(24):
-        time.sleep(10)
-        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_TOKEN}"
-        status_resp = requests.get(status_url, timeout=10)
-        status = status_resp.json()["data"]["status"]
-        print(f"[{i+1}] Status: {status}")
-        if status == "SUCCEEDED":
-            dataset_id = status_resp.json()["data"]["defaultDatasetId"]
-            break
-        elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
-            raise Exception(f"Apify run basarisiz: {status}")
-    else:
-        raise Exception("Apify run zaman asimi")
-
-    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
-    items_resp = requests.get(items_url, timeout=15)
-    items_resp.raise_for_status()
-    items = items_resp.json()
-    print(f"Apify'dan gelen ilan sayisi: {len(items)}")
+    items = resp.json()
+    print(f"Gelen ilan sayisi: {len(items)}")
 
     listings = []
     for item in items:
