@@ -1,47 +1,30 @@
-name: Leboncoin Araç Tarayıcı
+name: Leboncoin Bot
 
 on:
-schedule:
-# Her gün sabah 08:00 ve akşam 18:00 UTC (Türkiye +3 = 11:00 ve 21:00)
-- cron: “0 8 * * *”
-- cron: “0 18 * * *”
-workflow_dispatch:  # Elle de çalıştırabilirsin
+  schedule:
+    - cron: "0 8 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
 
 jobs:
-tarama:
-runs-on: ubuntu-latest
+  tarama:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-```
-steps:
-  - name: Repo'yu çek
-    uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-  - name: Python kur
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+      - run: pip install requests beautifulsoup4 lxml
 
-  - name: Bağımlılıkları yükle
-    run: pip install requests beautifulsoup4 lxml
+      - uses: actions/cache@v4
+        with:
+          path: seen_ids.json
+          key: seen-ids-${{ github.run_id }}
+          restore-keys: seen-ids-
 
-  - name: Daha önce görülen ilanları yükle (cache)
-    uses: actions/cache@v4
-    with:
-      path: seen_ids.json
-      key: seen-ids-${{ github.run_id }}
-      restore-keys: |
-        seen-ids-
-
-  - name: Botu çalıştır
-    env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    run: python bot.py
-
-  - name: Güncellenen seen_ids'i kaydet
-    uses: actions/cache/save@v4
-    if: always()
-    with:
-      path: seen_ids.json
-      key: seen-ids-${{ github.run_id }}
-```
+      - run: python bot.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
